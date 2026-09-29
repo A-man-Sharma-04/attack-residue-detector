@@ -4,42 +4,36 @@
 # The repo is the single source of truth. Nothing is edited on the target by
 # hand; the target is a deployment destination, not a working copy.
 #
-# Usage: ./deploy/deploy.sh <user@host> [remote_dir]
+# Uses ONE ssh connection (tar over stdin) rather than rsync + a second ssh.
+# bot-farm runs fail2ban and each extra connection multiplies the chance of
+# tripping a ban mid-workflow. One connection, one auth, one session.
+#
+# Usage: ./deploy/deploy.sh [target]      (default: botfarm, see ~/.ssh/config)
 set -euo pipefail
 
-TARGET="${1:?usage: deploy.sh <user@host> [remote_dir]}"
+TARGET="${1:-botfarm}"
 REMOTE_DIR="${2:-/opt/residue-system}"
-KEY="${SSH_KEY:-$HOME/Downloads/ssh-key-2026-09-02.key}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30)
 
-SSH_OPTS="-i ${KEY} -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'n/a')"
 
-echo "[deploy] rsync repo    : $REPO_ROOT"
-echo "[deploy] target        : $TARGET:$REMOTE_DIR"
-echo "[deploy] deployed from : commit $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'n/a')"
-echo "[deploy] ssh key       : $KEY"
+echo "[deploy] repo         : $REPO_ROOT"
+echo "[deploy] commit       : $COMMIT"
+echo "[deploy] target       : $TARGET -> $REMOTE_DIR"
 
-echo "[deploy] syncing residue_system/"
-rsync -az --delete -e "ssh ${SSH_OPTS}" \
-    --exclude '__pycache__' \
-    --exclude '*.pyc' \
-    "$REPO_ROOT/residue_system/" "$TARGET:~/residue_system/"
+# --- single connection: stream a tarball over stdin -----------------------
+tar -C "$REPO_ROOT" \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    -czf - residue_system attack deploy \
+  | ssh "${SSH_OPTS[@]}" "$TARGET" "sudo tar -xzf - -C '$REMOTE_DIR' 2>/dev/null || { sudo mkdir -p '$REMOTE_DIR' && sudo tar -xzf - -C '$REMOTE_DIR'; }; sudo chmod +x '$REMOTE_DIR'/deploy/*.sh '$REMOTE_DIR'/attack/*.py 2>/dev/null; true"
 
-echo "[deploy] syncing attack/ and deploy/"
-rsync -az --delete -e "ssh ${SSH_OPTS}" --exclude '__pycache__' \
-    "$REPO_ROOT/attack/" "$TARGET:~/attack/"
-rsync -az -e "ssh ${SSH_OPTS}" --exclude '__pycache__' \
-    "$REPO_ROOT/deploy/" "$TARGET:~/deploy/"
-
-echo "[deploy] installing to ${REMOTE_DIR}"
-ssh $SSH_OPTS "$TARGET" "
-    sudo mkdir -p '$REMOTE_DIR'
-    sudo cp -r ~/residue_system '$REMOTE_DIR/' 2>/dev/null || true
-    sudo cp -r ~/attack '$REMOTE_DIR/' 2>/dev/null || true
-    sudo cp -r ~/deploy  '$REMOTE_DIR/' 2>/dev/null || true
-    sudo chmod +x '$REMOTE_DIR'/deploy/*.sh '$REMOTE_DIR'/attack/*.py 2>/dev/null || true
-    echo "[deploy] installed:"
+echo "[deploy] installing stamp"
+ssh "${SSH_OPTS[@]}" "$TARGET" "
+    echo '$COMMIT' | sudo tee '$REMOTE_DIR/.deployed_commit' >/dev/null
+    sudo chmod 0644 '$REMOTE_DIR/.deployed_commit'
     ls -1 '$REMOTE_DIR'
 "
 
-echo "[deploy] done"
+echo "[deploy] done (commit $COMMIT)"
