@@ -1,0 +1,49 @@
+======================================================================
+  STEP 2 - INDEPENDENT VERIFICATION OF THE PLANTED ARTEFACTS
+  captured: 2026-09-29T09:14:38Z
+======================================================================
+
+--- 2a. unknown executable: /opt/.cache/update ---
+$ ls -l /opt/.cache/update
+-rwxr-xr-x 1 root root 223 Sep 29 08:45 /opt/.cache/update
+$ file /opt/.cache/update
+/opt/.cache/update: POSIX shell script, ASCII text executable
+$ sha256sum /opt/.cache/update
+a3ddfa74a5932f82f1739ccb68139e779c119560d11364773ed241f7001b33cf  /opt/.cache/update
+
+--- 2b. modified web file: /var/www/college/index.php ---
+$ ls -l /var/www/college/index.php
+-rw-r--r-- 1 root root 911 Sep 29 08:45 /var/www/college/index.php
+$ sha256sum /var/www/college/index.php
+bc3127c1647c0cda31cc65231ef18496f1c07a663a1a25a5c656fe4661f448d4  /var/www/college/index.php
+$ tail -3 /var/www/college/index.php   (the injected block)
+<?php /* SIMULATED BACKDOOR MARKER - residue detection demo, not real code */
+if (isset($_GET['cmd'])) { echo "SIMULATED: " . $_GET['cmd']; }
+?>
+
+--- 2c. new service unit: update-service.service ---
+$ ls -l /etc/systemd/system/update-service.service
+-rw-r--r-- 1 root root 358 Sep 29 08:45 /etc/systemd/system/update-service.service
+$ systemctl cat update-service.service
+# /etc/systemd/system/update-service.service
+# SIMULATED persistence artefact for the residue detection demo.
+# Written by attack/compromise_sim.py. Never enabled, never started.
+[Unit]
+Description=SIM update service (residue detection demo artefact)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'while true; do sleep 3600; done'
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+$ systemctl list-unit-files | grep update-service
+update-service.service                                                        disabled        enabled
+
+======================================================================
+  All four planted artefacts exist on disk and are independently
+  visible via ls / file / sha256sum / systemctl - not merely reported
+  by the simulation script that created them.
+======================================================================
