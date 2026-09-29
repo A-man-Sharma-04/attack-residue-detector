@@ -70,7 +70,7 @@ server {
     }
 NGINX
 if [ -n "$PHP_SOCK" ]; then
-cat >>/etc/nginx/sites-available/college <<NGINX
+sudo tee -a /etc/nginx/sites-available/college >/dev/null <<NGINX
 
     location ~ \\.php\$ {
         include snippets/fastcgi-php.conf;
