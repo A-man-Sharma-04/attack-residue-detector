@@ -1,0 +1,79 @@
+====================================================================
+  PAST INCIDENT DETECTED  INC-0001
+====================================================================
+  Type                : Possible past compromise: file_modified, new_executable, new_service
+  State               : CORROBORATED
+  First evidence      : 08:38:22
+  Last evidence       : 08:45:57
+  Residue detected    : 08:46:11
+  Residues found      : 3
+  Historical evidence : 36 events
+  Attack window       : 08:45:57 -> 08:45:57  (0.6s, path source)
+  Attacker active now : NO EVIDENCE OF LIVE ACTIVITY
+
+  Residue artifacts:
+    [new_service         ] /etc/systemd/system/update-service.service
+        systemd unit file present that is absent from the trusted baseline
+    [new_executable      ] /opt/.cache/update
+        unknown executable in a watched staging directory
+    [file_modified       ] /var/www/college/index.php
+        sha256 8330ff8c189c… -> bc3127c1647c…
+        content hash differs from the trusted baseline
+
+  Reconstructed attack path:
+    1. Web Request   v
+    2. Process Execution   v
+    3. File Modification   v
+    4. Persistence 
+    (distinct stages, in order of first appearance in the window;
+     the nginx access log is written when a request completes, so
+     web_request can sort fractionally after the auditd writes it
+     triggered - ordering is approximate at sub-second resolution)
+
+  Timeline (correlated evidence then residue;
+   '*' marks records inside the reconstructed attack window):
+    08:38:22  [evidence] opt_changes comm=mkdir path=/opt/.cache
+    08:38:22  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:38:22  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:38:22  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:38:22  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:38:22  [evidence] web_changes comm=python3 path=/var/www/college/index.php
+    08:38:35  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:38:37  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:38:37  [evidence] opt_changes comm=python3 path=/opt/.cache
+    08:38:37  [evidence] web_changes comm=python3 path=/var/www/college/index.php
+    08:38:47  [evidence] opt_changes comm=mkdir path=/opt/.cache
+    08:38:47  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:38:47  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:38:47  [evidence] web_changes comm=python3 path=/var/www/college/index.php
+    08:38:47  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:38:47  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:42:28  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:42:30  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:42:30  [evidence] opt_changes comm=python3 path=/opt/.cache
+    08:42:30  [evidence] web_changes comm=python3 path=/var/www/college/index.php
+    08:42:34  [evidence] opt_changes comm=mkdir path=/opt/.cache
+    08:42:34  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:42:34  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:42:34  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:42:34  [evidence] web_changes comm=python3 path=/var/www/college/index.php
+    08:42:34  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:44:41  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:44:43  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+    08:44:43  [evidence] opt_changes comm=python3 path=/opt/.cache
+    08:44:43  [evidence] web_changes comm=python3 path=/var/www/college/index.php
+   *08:45:57  [evidence] opt_changes comm=mkdir path=/opt/.cache
+   *08:45:57  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+   *08:45:57  [evidence] opt_changes comm=python3 path=/opt/.cache/update
+   *08:45:57  [evidence] web_changes comm=python3 path=/var/www/college/index.php
+   *08:45:57  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+   *08:45:57  [evidence] service_changes comm=python3 path=/etc/systemd/system/update-service.service
+    08:46:11  [residue ] new_service: /etc/systemd/system/update-service.service
+    08:46:11  [residue ] file_modified: /var/www/college/index.php
+    08:46:11  [residue ] new_executable: /opt/.cache/update
+
+    note: 30 corroborating event(s) in the 24h lookback fall
+          outside the attack window; they are earlier, separate
+          bursts touching the same paths.
+
+====================================================================

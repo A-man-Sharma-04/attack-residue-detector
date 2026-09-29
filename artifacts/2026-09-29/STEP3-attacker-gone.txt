@@ -1,0 +1,70 @@
+======================================================================
+  STEP 3 - VERIFICATION: ATTACK ACTIVITY HAS STOPPED
+  captured: 2026-09-29T08:51:12Z
+  (captured AFTER the final compromise run; residue still present)
+======================================================================
+
+Purpose: show that the attack is OVER. Nothing of the attacker is running,
+listening, or holding a connection. What remains is residue on disk only.
+
+--- 3a. No attacker process is running -------------------------------
+$ ps -ef | grep -Ei "update|.cache|college|backdoor" | grep -v grep
+  (no matching process)
+
+--- 3b. Planted unit is NOT running and NOT enabled --------------------
+$ systemctl is-active  update-service.service   ->  inactive
+$ systemctl is-enabled update-service.service   ->  disabled
+  The unit exists as a file but was never activated. A file-presence check is
+  the ONLY way to notice it - which is exactly the point of this project.
+
+--- 3c. No suspicious listening socket -------------------------------
+$ ss -tlnp | grep -E ":(9999|4444|1337|6666)"
+  (no suspicious listening socket)
+
+--- 3d. Every established connection is accounted for ----------------
+$ ss -tnp state established
+0      0         10.0.0.119:41628 149.154.166.110:443   users:(("python3",pid=327200,fd=3))                                      
+0      0         10.0.0.119:51490    13.214.26.65:443   users:(("python3",pid=99817,fd=3))                                       
+0      0         10.0.0.119:22     117.55.241.163:41928 users:(("sshd-session",pid=382605,fd=9),("sshd-session",pid=382548,fd=9))
+
+  ATTRIBUTION (pre-existing production services, none attacker):
+    pid 327200  -> 149.154.166.110:443   telegram bot (python3)
+    pid 99817   ->  13.214.26.65:443     opencode agent (python3)
+    sshd-session                              this verification session
+  Unexplained outbound connections: 0
+
+--- 3e. Honest note on the modified web file --------------------------
+The injected PHP is still EXECUTABLE if the URL is requested. Verified:
+$ curl -s "http://127.0.0.1:8081/index.php?cmd=id" | tail -1
+  SIMULATED: id
+  Requests for cmd=id in the nginx access log: 7
+  Of those, NOT from 127.0.0.1 (i.e. external/automatic): 0
+  Most recent request: [29/Sep/2026:08:51:13 (127.0.0.1 + curl/8.18.0 = my own check)
+
+  INTERPRETATION: no process is exercising the injected code, so there is no
+  live attack in progress. But the CAPABILITY survives in the file. This is
+  precisely why file-integrity residue matters: an attacker who is gone still
+  leaves a working backdoor behind, and no live-process view would report it.
+
+--- 3f. No additional persistence mechanism ----------------------------
+$ ls -1 /etc/cron.d
+e2scrub_all
+php
+  Entries attributable to the simulation: 0
+  (e2scrub_all and php are stock system entries, present before the test)
+$ crontab -l for ubuntu (non-comment lines)
+  (no user crontab entries)
+  authorized_keys: not modified by the simulation (no SSH persistence)
+
+======================================================================
+  VERDICT
+======================================================================
+  * No attacker process running ........................... CONFIRMED
+  * Planted unit inactive and disabled ................... CONFIRMED
+  * No new listening socket .............................. CONFIRMED
+  * No unexplained outbound connection ................... CONFIRMED (0)
+  * No cron or SSH-based persistence added ............... CONFIRMED
+  * Injected code idle, not exercised by anyone .......... CONFIRMED
+
+  The attack is over. What remains is three residue artefacts on disk,
+  which the detector must now find WITHOUT any live attacker activity.
