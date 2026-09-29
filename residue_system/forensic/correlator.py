@@ -43,10 +43,18 @@ RESIDUE_AUDIT_KEYS: dict[ResidueType, tuple[str, ...]] = {
 }
 
 # Audit key -> attack stage, for building the ordered attack path.
+#
+# These keys describe FILESYSTEM WATCHES, not attacker intent, so they must be
+# read literally. An earlier version mapped web_changes -> WEB_REQUEST and
+# opt_changes -> PROCESS_EXECUTION, which asserted a web request and a process
+# launch where the record only proves a file write. Web request evidence comes
+# from the nginx access log (see evidence/nginx_access.py); process execution
+# evidence comes from the process_execution key, i.e. real execve records.
 KEY_TO_STAGE: dict[str, AttackStage] = {
-    "web_changes": AttackStage.WEB_REQUEST,
-    "opt_changes": AttackStage.PROCESS_EXECUTION,
+    "web_request": AttackStage.WEB_REQUEST,
     "process_execution": AttackStage.PROCESS_EXECUTION,
+    "web_changes": AttackStage.FILE_MODIFICATION,
+    "opt_changes": AttackStage.FILE_MODIFICATION,
     "service_changes": AttackStage.PERSISTENCE,
     "ssh_keys": AttackStage.PERSISTENCE,
     "cron_changes": AttackStage.PERSISTENCE,
@@ -72,48 +80,123 @@ def _within_window(events: list[EvidenceEvent],
     return clusters
 
 
+# A quiet period longer than this ends a burst. The 10-minute rule above is the
+# *promotion* rule and is far too coarse to segment activity: because
+# _within_window chains on each cluster's first event, four test runs 4
+# minutes apart collapse into one 252s "attack". Segmentation for the attack
+# path needs a different, much tighter notion of "continuous".
+BURST_GAP_SEC = 45
+
+
+def _segment_by_gap(events: list[EvidenceEvent],
+                    gap_sec: int = BURST_GAP_SEC) -> list[list[EvidenceEvent]]:
+    """Split events into bursts separated by a quiet gap."""
+    if not events:
+        return []
+    ordered = sorted(events, key=lambda e: e.timestamp)
+    bursts: list[list[EvidenceEvent]] = [[ordered[0]]]
+    for ev in ordered[1:]:
+        if ev.timestamp - bursts[-1][-1].timestamp <= gap_sec:
+            bursts[-1].append(ev)
+        else:
+            bursts.append([ev])
+    return bursts
+
+
+def _norm(path: str) -> str:
+    return (path or "").strip().rstrip("/") or "/"
+
+
+def _same(a: str, b: str) -> bool:
+    return _norm(a) == _norm(b)
+
+
+# Our own deployment and artifact store. These produce a large volume of
+# perfectly valid audit records, but they are the detector reporting on itself,
+# not evidence of an attack. Never cite them.
+# How far before the first file write to look for the triggering request.
+WEB_REQUEST_LEADIN_SEC = 120
+
+SELF_TREE_PREFIXES = (
+    "/opt/residue-system",
+    "/var/lib/residue-system",
+)
+
+
 def related_events(residue: Residue,
                    events: Iterable[EvidenceEvent]) -> list[EvidenceEvent]:
-    """Evidence plausibly responsible for a residue.
+    """Evidence specifically responsible for THIS residue.
 
-    Two independent ways to match, because either alone is weak:
-      1. the audit key mapped to this residue type, and
-      2. the event actually touched a path related to the residue target.
+    Matching is path-anchored, not category-anchored. Matching on the audit
+    key alone was far too loose: a residue at /opt/.cache/update matched every
+    ``opt_changes`` record in the 24h window, so the ~100 records produced by
+    the detector's own tar-over-ssh deployment buried the handful of genuine
+    events. A reviewer would rightly conclude the correlator understands
+    nothing.
+
+    Precedence, most specific first:
+      1. the event names exactly the residue target
+      2. the event names the residue's containing directory (it was created,
+         removed or chmod'ed)
+      3. the event touches something inside the residue's own directory
+      4. only for residue types with no filesystem path (accounts), fall back
+         to the audit key, and only for events that carry no path at all
     """
-    keys = RESIDUE_AUDIT_KEYS.get(residue.residue_type, ())
-    target = residue.target
+    target = (residue.target or "").strip()
     parent = os.path.dirname(target) if "/" in target else ""
-    stem = os.path.basename(target) if target else ""
+    keys = RESIDUE_AUDIT_KEYS.get(residue.residue_type, ())
+    is_account = residue.residue_type in (ResidueType.NEW_USER,
+                                          ResidueType.PERMISSION_CHANGE)
 
     hits: list[EvidenceEvent] = []
     for ev in events:
-        by_key = bool(keys) and ev.audit_key in keys
-        by_path = False
-        for name in ev.path_names():
-            if not name:
-                continue
-            if name == target:
-                by_path = True
-                break
-            if stem and stem in name and parent and parent in name:
-                by_path = True
-                break
-            if parent and (name.startswith(parent.rstrip("/") + "/")):
-                by_path = True
-                break
-        if by_key or by_path:
+        names = [n for n in ev.path_names() if n]
+
+        # self-noise guard
+        if any(n.startswith(prefix)
+               for n in names for prefix in SELF_TREE_PREFIXES):
+            continue
+
+        if target and any(_same(n, target) for n in names):
             hits.append(ev)
+            continue
+
+        if parent and any(_same(n, parent) for n in names):
+            hits.append(ev)
+            continue
+
+        if parent and any(n.startswith(parent.rstrip("/") + "/")
+                          for n in names):
+            hits.append(ev)
+            continue
+
+        if is_account and keys and ev.audit_key in keys and not names:
+            hits.append(ev)
+            continue
+
     return hits
 
 
 def build_attack_path(events: list[EvidenceEvent]) -> list[AttackStage]:
-    """Ordered, de-duplicated stage sequence for the demo's attack path."""
+    """Ordered, de-duplicated stage sequence for the demo's attack path.
+
+    Shows each distinct stage once, in order of first appearance. Emitting
+    every transition produced a 23-step oscillation like
+    Process->Web->Process->File->Process, which is an artefact of one execve
+    record per syscall, not an attack narrative. The summary is the useful
+    claim: "a process ran, wrote files, and installed persistence".
+
+    Caveat worth stating in the report: the nginx access log is written as
+    the request completes, so a web_request stage can appear fractionally
+    after the auditd records it triggered. Ordering against auditd is
+    therefore approximate at sub-second resolution.
+    """
     stages: list[AttackStage] = []
     for ev in sorted(events, key=lambda e: e.timestamp):
         stage = KEY_TO_STAGE.get(ev.audit_key, AttackStage.UNKNOWN)
         if stage is AttackStage.UNKNOWN:
             continue
-        if not stages or stages[-1] is not stage:
+        if stage not in stages:
             stages.append(stage)
     return stages
 
@@ -168,6 +251,57 @@ def correlate(residues: list[Residue],
             all_rel[ev.event_id] = ev
     evidence = sorted(all_rel.values(), key=lambda e: e.timestamp)
 
+    # --- pick the single primary burst -------------------------------
+    # The lookback legitimately contains several bursts: the same artefacts
+    # are often re-created across repeated test runs, and because they share
+    # paths, path matching cannot tell them apart. Residue reflects the most
+    # RECENT change, so the authoritative window is the latest burst that
+    # still explains the most residue targets. Picking the densest burst
+    # instead merged four separate runs into a 252s "attack" and produced a
+    # 23-stage nonsense path.
+    residue_targets = {r.target for r, _ in promoted}
+    primary: list[EvidenceEvent] = []
+    best_score: tuple[int, float, int] = (-1, -1.0, -1)
+    for cluster in _segment_by_gap(evidence):
+        names = {n for ev in cluster for n in ev.path_names()}
+        covered = sum(1 for t in residue_targets
+                      if any(_same(n, t) for n in names))
+        score = (covered, cluster[-1].timestamp, len(cluster))
+        if score > best_score:
+            best_score, primary = score, cluster
+
+    # --- process lineage: who was actually running? --------------------
+    # The file-write events say what changed but not which process did it.
+    # Pull in the exec events for those PIDs so the report can name the
+    # process that planted the artefacts, and so initial execution shows up
+    # in the path ahead of the writes.
+    lineage: dict[str, EvidenceEvent] = {}
+    pids = {ev.pid for ev in primary if ev.pid}
+    ppids = {ev.ppid for ev in primary if ev.ppid}
+    for ev in window_events:
+        if ev.audit_key != "process_execution":
+            continue
+        if ev.pid in pids or ev.ppid in ppids or ev.pid in ppids:
+            lineage[ev.event_id] = ev
+    for ev in sorted(lineage.values(), key=lambda e: e.timestamp):
+        if not any(e.event_id == ev.event_id for e in primary):
+            primary.append(ev)
+    primary.sort(key=lambda e: e.timestamp)
+
+    # --- web request context -------------------------------------------
+    # A request precedes the writes that follow from it, so allow a short
+    # lead-in. These give the path a genuine first stage instead of asserting
+    # one from a file-write record.
+    if primary:
+        lo = primary[0].timestamp - WEB_REQUEST_LEADIN_SEC
+        hi = primary[-1].timestamp
+        for ev in window_events:
+            if ev.audit_key != "web_request":
+                continue
+            if lo <= ev.timestamp <= hi:
+                primary.append(ev)
+        primary.sort(key=lambda e: e.timestamp)
+
     first = evidence[0].timestamp
     last = evidence[-1].timestamp
     residue_ts = min(r.detected_at for r, _ in promoted)
@@ -181,11 +315,13 @@ def correlate(residues: list[Residue],
         title="Possible past compromise: " + ", ".join(types),
         residues=[r for r, _ in promoted],
         evidence=evidence,
-        attack_path=build_attack_path(evidence),
+        attack_path=build_attack_path(primary),
         first_evidence_at=first,
         last_evidence_at=last,
         residue_detected_at=residue_ts,
         created_at=now,
+        primary_window_start=primary[0].timestamp if primary else None,
+        primary_window_end=primary[-1].timestamp if primary else None,
     )
     return inc
 
@@ -204,6 +340,11 @@ def render(inc: Incident) -> str:
     add(f"  Residue detected    : {_hm(inc.residue_detected_at)}")
     add(f"  Residues found      : {len(inc.residues)}")
     add(f"  Historical evidence : {len(inc.evidence)} events")
+    if inc.primary_window_start:
+        span = (inc.primary_window_end or inc.primary_window_start) \
+            - inc.primary_window_start
+        add(f"  Attack window       : {_hm(inc.primary_window_start)} -> "
+            f"{_hm(inc.primary_window_end)}  ({span:.1f}s, path source)")
     add(f"  Attacker active now : "
         f"{'NO EVIDENCE OF LIVE ACTIVITY' if inc.last_evidence_at < inc.residue_detected_at else 'POSSIBLE'}")
     add("")
@@ -218,10 +359,25 @@ def render(inc: Incident) -> str:
     for i, stage in enumerate(inc.attack_path):
         arrow = "  v" if i < len(inc.attack_path) - 1 else ""
         add(f"    {i + 1}. {stage.value.replace('_', ' ').title()} {arrow}")
+    add("    (distinct stages, in order of first appearance in the window;")
+    add("     the nginx access log is written when a request completes, so")
+    add("     web_request can sort fractionally after the auditd writes it")
+    add("     triggered - ordering is approximate at sub-second resolution)")
     add("")
-    add("  Timeline (correlated evidence then residue):")
+    add("  Timeline (correlated evidence then residue;")
+    add("   '*' marks records inside the reconstructed attack window):")
+    lo = inc.primary_window_start or 0.0
+    hi = inc.primary_window_end or 0.0
     for ts, kind, desc in inc.timeline():
-        add(f"    {_hm(ts)}  [{kind:<8}] {desc}")
+        mark = "*" if lo <= ts <= hi else " "
+        add(f"   {mark}{_hm(ts)}  [{kind:<8}] {desc}")
+    outside = sum(1 for ts, kind, _ in inc.timeline()
+                  if kind == "evidence" and not (lo <= ts <= hi))
+    if outside:
+        add("")
+        add(f"    note: {outside} corroborating event(s) in the 24h lookback fall")
+        add("          outside the attack window; they are earlier, separate")
+        add("          bursts touching the same paths.")
     add("")
     add("=" * 68)
     return "\n".join(lines)

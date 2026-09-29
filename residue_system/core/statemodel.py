@@ -178,6 +178,12 @@ class Incident:
     created_at: float = 0.0
     actions_taken: list[str] = field(default_factory=list)
     verification: str = ""
+    # The single burst of activity the attack path was reconstructed from.
+    # The 24h lookback can contain several bursts; mixing them produced an
+    # oscillation Process->Persistence->Process->Web that was not a real
+    # sequence but three separate runs interleaved.
+    primary_window_start: float | None = None
+    primary_window_end: float | None = None
 
     # -- timeline ----------------------------------------------------------
 

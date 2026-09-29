@@ -25,10 +25,13 @@ from residue_system.baseline import engine as baseline_mod
 from residue_system.collectors import state as collectors
 from residue_system.core.statemodel import Spec
 from residue_system.evidence import auditlog_source
+from residue_system.evidence import nginx_access
 from residue_system.forensic import correlator as forensic
 from residue_system.residue import detector
 
 AUDIT_LOG = os.environ.get("RESIDUE_AUDIT_LOG", "/var/log/audit/audit.log")
+ACCESS_LOG = os.environ.get("RESIDUE_ACCESS_LOG",
+                          "/var/log/nginx/college.access.log")
 
 ARTIFACT_DIR = os.environ.get("RESIDUE_ARTIFACT_DIR", "/var/lib/residue-system/artifacts")
 
@@ -146,6 +149,13 @@ def cmd_forensic(args: argparse.Namespace) -> int:
     since = time.time() - Spec.LOOKBACK_HOURS * 3600
     events = auditlog_source.read_audit_log(AUDIT_LOG, since=since)
 
+    # Auditd covers file writes and execve. Genuine web-request evidence comes
+    # from the vhost access log, so the reconstructed path can start with a
+    # real request instead of an inferred one.
+    web_events = nginx_access.parse_access_log(ACCESS_LOG, since=since)
+    events = events + web_events
+    n_audit, n_web = len(events) - len(web_events), len(web_events)
+
     inc = forensic.correlate(residues, events, incident_id=args.incident_id)
 
     if inc is None:
@@ -161,6 +171,7 @@ def cmd_forensic(args: argparse.Namespace) -> int:
 
     report = forensic.render(inc)
     print(report)
+    print(f"\n[forensic] evidence sources: {n_audit} auditd events, {n_web} web requests")
 
     path_json = _save(f"incident-{inc.incident_id}-{_stamp()}.json",
                       json.dumps(inc.to_dict(), indent=2, sort_keys=True,
