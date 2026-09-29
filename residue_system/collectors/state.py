@@ -14,6 +14,7 @@ import json
 import os
 import pwd
 import re
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,12 @@ WATCHED_FILE_DIRS = [
 WATCHED_EXEC_DIRS = [
     "/opt",
 ]
+
+# Our own deployment lives under /opt too. Never report it as residue, or the
+# detector would flag its own source tree and drown real findings.
+SELF_EXCLUDE_PREFIXES = (
+    "/opt/residue-system",
+)
 
 # Where a new systemd unit would appear.
 SYSTEMD_UNIT_DIRS = [
@@ -138,30 +145,44 @@ def collect_services() -> dict[str, Any]:
     }
 
 
-def collect_ports() -> dict[str, Any]:
-    """Listening TCP sockets."""
-    out = _run(["ss", "-tlnH"])
+def parse_ss_ports(out: str) -> dict[str, Any]:
+    """Parse `ss -tlnH` output. Pure function, so it is directly testable.
+
+    `ss -tlnH` prints whitespace-separated columns with no header:
+        State Recv-Q Send-Q Local-Address:Port Peer-Address:Port
+    so the local endpoint is always column index 3. Parse positionally
+    instead of with a regex: a regex over the whole line happily matches
+    'LISTEN' as the address and silently drops every socket.
+    """
     ports: dict[str, Any] = {}
     for line in out.splitlines():
-        m = re.search(r"(\S+)\s+.*:(\d+)\s", line + " ")
-        if not m:
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            addr = parts[3]
-        else:
-            addr = m.group(1)
-        if ":" not in addr:
+        parts = line.split()
+        if len(parts) < 4:
             continue
-        host, _, port_s = addr.rpartition(":")
+        if parts[0] not in ("LISTEN", "UNCONN"):
+            continue
+        endpoint = parts[3]
+        if ":" not in endpoint:
+            continue
+        host, _, port_s = endpoint.rpartition(":")
+        host = host.strip("[]")          # [::1]:8080 -> ::1
         try:
             port = int(port_s)
         except ValueError:
             continue
         if port in PORT_IGNORE:
             continue
-        ports.setdefault(port, {"port": port, "bind": host})
+        entry = ports.setdefault(port, {"port": port, "bind": host,
+                                        "state": parts[0]})
+        entry.setdefault("also_bound", [])
+        if host != entry["bind"]:
+            entry["also_bound"].append(host)
     return {"listening_ports": [ports[p] for p in sorted(ports)]}
+
+
+def collect_ports() -> dict[str, Any]:
+    """Listening TCP sockets."""
+    return parse_ss_ports(_run(["ss", "-tlnH"]))
 
 
 def collect_files() -> dict[str, Any]:
@@ -181,23 +202,45 @@ def collect_files() -> dict[str, Any]:
 
 
 def collect_executables() -> dict[str, Any]:
-    """Candidate executable/staging artefacts under watched dirs."""
+    """Candidate executable / staging artefacts under watched dirs.
+
+    Only counts a file as executable when it actually carries an execute bit
+    or starts with a shebang. Treating every non-empty file as executable
+    drowns the signal: /opt holds our own deployment, so a naive
+    "non-empty == executable" rule reported our own source tree as residue
+    noise. Our own install tree is excluded outright for the same reason.
+    """
     found: dict[str, Any] = {}
     for root_dir in WATCHED_EXEC_DIRS:
-        for dirpath, _dirnames, filenames in os.walk(root_dir):
+        if not os.path.isdir(root_dir):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            dirnames[:] = [d for d in dirnames
+                           if os.path.join(dirpath, d) not in SELF_EXCLUDE_PREFIXES]
             for fn in filenames:
                 full = os.path.join(dirpath, fn)
+                if any(full.startswith(p) for p in SELF_EXCLUDE_PREFIXES):
+                    continue
                 try:
                     st = os.stat(full)
                 except OSError:
                     continue
-                if not os.access(full, os.X_OK) and st.st_size == 0:
+                if not stat.S_ISREG(st.st_mode) or st.st_size == 0:
+                    continue
+                exec_bit = bool(st.st_mode & 0o111)
+                try:
+                    with open(full, "rb") as fh:
+                        shebang = fh.read(2) == b"#!"
+                except OSError:
+                    shebang = False
+                if not (exec_bit or shebang):
                     continue
                 found[full] = {
                     "sha256": sha256_file(full),
                     "size": st.st_size,
                     "mode": oct(st.st_mode & 0o7777),
-                    "executable": os.access(full, os.X_OK),
+                    "executable": exec_bit,
+                    "shebang": shebang,
                     "mtime": st.st_mtime,
                 }
     return {"executables": found}

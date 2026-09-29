@@ -188,26 +188,31 @@ def cmd_state(args: argparse.Namespace) -> int:
 
 # --------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
+    # Shared --name option, so every subcommand addresses the same baseline.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--name", default="local",
+                        help="baseline name (default: local)")
+
     p = argparse.ArgumentParser(
         prog="residue-system",
         description="Attack residue detection and forensic reconstruction")
-    p.add_argument("--baseline-name", default="local",
-                   help="baseline name (default: local)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    b = sub.add_parser("baseline", help="record/inspect the trusted state")
+    b = sub.add_parser("baseline", help="record/inspect the trusted state",
+                       parents=[common])
     bsub = b.add_subparsers(dest="baseline_cmd", required=True)
     bc = bsub.add_parser("create"); bc.add_argument("--note", default="")
     bsub.add_parser("show")
     bsub.add_parser("verify")
     b.set_defaults(func=cmd_baseline)
 
-    r = sub.add_parser("residue", help="detect attack residue")
+    r = sub.add_parser("residue", help="detect attack residue", parents=[common])
     rsub = r.add_subparsers(dest="residue_cmd", required=True)
     rs = rsub.add_parser("scan"); rs.add_argument("--json", action="store_true")
     r.set_defaults(func=cmd_residue)
 
-    f = sub.add_parser("forensic", help="reconstruct a past incident")
+    f = sub.add_parser("forensic", help="reconstruct a past incident",
+                       parents=[common])
     fsub = f.add_subparsers(dest="forensic_cmd", required=True)
     fc = fsub.add_parser("correlate")
     fc.add_argument("--incident-id", default="INC-0001")
