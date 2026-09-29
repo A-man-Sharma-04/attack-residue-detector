@@ -21,11 +21,11 @@ import time
 if __package__ in (None, ""):  # allow running the file directly
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from residue_system import baseline as baseline_mod
-from residue_system import forensic
+from residue_system.baseline import engine as baseline_mod
 from residue_system.collectors import state as collectors
 from residue_system.core.statemodel import Spec
 from residue_system.evidence import auditlog_source
+from residue_system.forensic import correlator as forensic
 from residue_system.residue import detector
 
 AUDIT_LOG = os.environ.get("RESIDUE_AUDIT_LOG", "/var/log/audit/audit.log")
