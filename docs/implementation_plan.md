@@ -404,5 +404,86 @@ Explicitly out of scope until after Day 4:
 *reverted* server returns **0**. That is what proves the system compares real state rather than
 performing a scripted performance.
 
-**Reminder for the demo script:** never run `hydra`/brute-force against `bot-farm`.
-fail2ban is live there and it would ban the presenter out of their own production box.
+---
+
+## Findings from the 2026-09-29 verification run
+
+### SSH lockouts on `bot-farm` were UFW rate limiting, not fail2ban
+
+`bot-farm` locked us out three times with `Connection refused`. Two earlier
+guesses were wrong and are recorded here so nobody repeats them:
+
+- **Not fail2ban.** `fail2ban.service` does not exist and `fail2ban-server` is
+  not installed on the box.
+- **Not an OOM kill of sshd.** There is one OOM event in `dmesg`, but it is
+  from 2026-09-10 (`chrome-headless`), and `systemctl show ssh -p NRestarts`
+  reports `0`.
+
+The real cause is a UFW rule:
+
+```
+22/tcp   LIMIT IN   Anywhere   # SSH rate-limited
+```
+
+UFW's `LIMIT` permits a burst (default 6 connections / 30s) and then
+**rejects** the excess with a TCP RST, which the client reports as
+`Connection refused`. Our deploy script opened four SSH connections within
+about three seconds and tripped it.
+
+That rule is there for a reason: `/var/log/auth.log` shows an external host
+(`220.85.210.200`) repeatedly attempting `root` logins. So the fix keeps the
+limiter in place for everyone and exempts only the development workstation:
+
+```bash
+sudo ufw insert 1 allow from <workstation-ip> to any port 22 proto tcp \
+  -c "dev workstation - exempt from ssh rate limit"
+```
+
+Verified with a 12-connection burst in ~3s: 12/12 succeeded, where previously
+the same pattern produced a lockout. `deploy/deploy.sh` was also rewritten to
+use a single `tar`-over-`ssh` connection and `~/.ssh/config` gained a
+`ControlMaster` alias, so routine work now rides one long-lived session.
+
+### Collector and correlator bugs found by inspecting real output
+
+Every one of these was invisible in unit tests and only showed up in the
+actual artifacts:
+
+| Component | Bug | Symptom | Fix |
+|---|---|---|---|
+| `collect_ports` | Regex captured group 1, which is the literal `LISTEN` token | Always reported **0 listening ports** | Parse column 3 positionally; now reports 8 |
+| `collect_executables` | Treated every non-empty file under `/opt` as executable | 27 "executables", all our own deployment | Require an exec bit or shebang; exclude `/opt/residue-system`; now 0 |
+| `related_events` | Matched audit key **OR** path | ~100 lines of our own deploy in the incident report | Path-anchored matching; self-tree excluded |
+| `KEY_TO_STAGE` | `web_changes`→WEB_REQUEST, `opt_changes`→PROCESS_EXECUTION | Asserted stages the records do not prove | Literal mapping; real sources added |
+| attack-path segmentation | Reused the 10-min promotion rule | 4 test runs merged into one 252s "attack", 23-stage path | Gap-based 45s segmentation; latest burst covering the residue wins |
+| `.gitignore` | Unanchored `evidence/`, `residue/`, `artifacts/`, `*.log` | **Entire evidence layer, residue detector and test fixture were never committed** | Anchored to repo root; `tests/fixtures/*.log` re-included; verified by fresh-clone import |
+
+The `.gitignore` bug was the most serious: `git add -A` silently skipped six
+source files, so a fresh clone could not import the project at all, and the
+`638ba6c` commit message overstated what it contained.
+
+### Result of the 4-step demo
+
+Reproduced end to end on `bot-farm`; evidence committed under
+`artifacts/2026-09-29/`.
+
+- Clean state → `residue scan` returns **0** (no false positives).
+- Single compromise run → `residue scan` returns **exactly 3**
+  (`new_service`, `new_executable`, `file_modified`).
+- Incident state **CORROBORATED**; each residue has ≥2 related Auditd events
+  inside the 10-minute window.
+- Reconstructed path: `Web Request → Process Execution → File Modification →
+  Persistence`.
+- `ausearch` remains unusable on this host (`-ts today` → `<no matches>`), so
+  `/var/log/audit/audit.log` is parsed directly and grouped by event serial.
+- Production untouched throughout: telegram-bot, n8n-sandbox, docker and
+  opencode PIDs unchanged; `/usr/bin/python3` intact; app still loopback-only.
+
+**Demo-script correction:** the earlier warning in this document told the
+presenter that fail2ban would ban them out of their own production box. That is
+incorrect for this host. The real risk is UFW's `22/tcp LIMIT`, which will lock
+the presenter out during a live demo if the tooling opens several SSH
+connections in quick succession. Keep the exemption in place before the demo.
+
+**Demo-script safety:** never run `hydra` or any brute-force against
+`bot-farm`.
