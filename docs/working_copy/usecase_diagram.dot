@@ -1,0 +1,51 @@
+
+digraph UseCaseDiagram {
+    rankdir=LR;
+    fontname="Helvetica,Arial,sans-serif";
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=11];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=10];
+    bgcolor="transparent";
+
+    node [shape=rectangle, style="filled,rounded", fillcolor="#1e293b", fontcolor="#f8fafc", color="#38bdf8", penwidth=2];
+    actor_analyst [label="👤 Security Analyst\n(Operator / Evaluator)"];
+    actor_attacker [label="👤 Attacker / Simulator\n(External Actor)"];
+    actor_target [label="🖥️ Target Linux Server\n(Ubuntu 26.04 bot-farm)"];
+
+    subgraph cluster_system {
+        label = "Linux Server Attack Residue & Forensic Response System";
+        style = "filled,rounded";
+        color = "#0f172a";
+        fillcolor = "#f8fafc";
+        penwidth = 2.5;
+        fontname = "Helvetica-Bold";
+        fontsize = 14;
+        fontcolor = "#0f172a";
+
+        node [shape=ellipse, style="filled", fillcolor="#e2e8f0", color="#1e293b", penwidth=1.5, fontcolor="#0f172a"];
+        uc1 [label="UC-01: Record & Verify\nBaseline State"];
+        uc2 [label="UC-02: Execute Controlled\nAttack Simulation"];
+        uc3 [label="UC-03: Scan & Classify\nAttack Residue"];
+        uc4 [label="UC-04: Correlate Forensic\nEvidence (Auditd & Nginx)"];
+        uc5 [label="UC-05: Execute Incident\nContainment & Response"];
+        uc6 [label="UC-06: Monitor Live Web\nPresentation Dashboard"];
+    }
+
+    edge [color="#1e293b", penwidth=1.5, arrowtail=none, arrowhead=none];
+    actor_analyst -> uc1;
+    actor_analyst -> uc3;
+    actor_analyst -> uc4;
+    actor_analyst -> uc5;
+    actor_analyst -> uc6;
+
+    actor_attacker -> uc2;
+
+    actor_target -> uc1 [dir=back];
+    actor_target -> uc2 [dir=back];
+    actor_target -> uc3 [dir=back];
+    actor_target -> uc5 [dir=back];
+
+    edge [style="dashed", color="#0284c7", penwidth=1.5, arrowhead="open", arrowtail=none];
+    uc3 -> uc4 [label="  <<include>>  "];
+    uc4 -> uc5 [label="  <<extend>>  "];
+    uc5 -> uc6 [label="  <<include>>  "];
+}

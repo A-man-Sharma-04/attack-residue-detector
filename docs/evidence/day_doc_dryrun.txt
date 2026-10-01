@@ -1,0 +1,5 @@
+Timed Dry Run Completed: 7 minutes 42 seconds.
+Student: Aman Sharma (Roll No: 2400320100161), Academic Session: 2026-27
+Guide: Sarath G (Cybersecurity Trainer & Consultant)
+Presentation Flow: Title -> Problem Statement -> Architecture -> Live Demo -> Containment Verification -> Conclusion.
+All slides populated with actual project telemetry, screenshots, and test metrics.

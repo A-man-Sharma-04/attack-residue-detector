@@ -56,6 +56,7 @@ def generate_html_report(baseline: Dict[str, Any], residues: List[Any], incident
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="3">
     <title>Attack Residue & Forensic Dashboard</title>
     <style>
         :root {{

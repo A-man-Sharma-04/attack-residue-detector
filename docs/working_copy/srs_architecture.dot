@@ -1,0 +1,59 @@
+
+digraph SystemArchitecture {
+    rankdir=TB;
+    fontname="Helvetica,Arial,sans-serif";
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=10];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=9];
+    bgcolor="white";
+
+    // External Entities
+    node [shape=rectangle, style="filled,rounded", fillcolor="#1e293b", fontcolor="#f8fafc", color="#38bdf8", penwidth=2];
+    attacker [label="👤 Attacker / Simulator
+(Kali Linux Workstation)"];
+    operator [label="👤 Security Analyst / Evaluator
+(Browser / CLI Operator)"];
+
+    // Target Host Cluster
+    subgraph cluster_target {
+        label = "Target Host Architecture: Ubuntu 26.04 LTS (bot-farm)";
+        style = "filled,rounded";
+        color = "#0f172a";
+        fillcolor = "#f8fafc";
+        penwidth = 2;
+
+        // Submodules
+        node [shape=box, style="filled,rounded", fillcolor="#e2e8f0", color="#1e293b", penwidth=1.5, fontcolor="#0f172a"];
+        mod_baseline [label="Module 1: Baseline Engine
+(collectors/state.py & baseline/engine.py)"];
+        mod_detector [label="Module 2: Residue Detector
+(residue/detector.py)"];
+        mod_forensic [label="Module 3: Forensic Correlator
+(evidence/* & forensic/correlator.py)"];
+        mod_response [label="Module 4: Containment Engine
+(response/containment.py)"];
+        mod_dashboard [label="Module 5: Presentation Dashboard
+(web_ui/dashboard.py & HTTP Server)"];
+
+        // Data Stores
+        node [shape=cylinder, style="filled", fillcolor="#cbd5e1", color="#475569", fontcolor="#0f172a"];
+        store_manifest [label="SHA256 Baseline Manifest
+(baseline-local.json)"];
+        store_logs [label="Kernel Telemetry
+(/var/log/audit/audit.log & nginx.log)"];
+        store_artifacts [label="Incident Storage
+(/var/lib/residue-system/artifacts/)"];
+    }
+
+    // Connections
+    attacker -> store_logs [label="Web Shell HTTP Request"];
+    operator -> mod_baseline [label="1. Record Baseline"];
+    mod_baseline -> store_manifest [label="Write SHA256 Hashes"];
+
+    mod_detector -> store_manifest [label="Read Trusted Hashes"];
+    mod_detector -> mod_forensic [label="Send Residue Items"];
+    store_logs -> mod_forensic [label="Parse Syscalls & HTTP Requests"];
+
+    mod_forensic -> mod_response [label="Correlated Incident"];
+    mod_response -> mod_dashboard [label="Update Status"];
+    operator -> mod_dashboard [label="View Live Dashboard (Port 8081)", dir=back];
+}

@@ -1,0 +1,44 @@
+
+digraph DFDLevel1 {
+    rankdir=LR;
+    fontname="Helvetica,Arial,sans-serif";
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=10];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=9];
+    bgcolor="white";
+
+    node [shape=rectangle, style="filled", fillcolor="#1e293b", fontcolor="#f8fafc"];
+    E1 [label="Attacker"];
+    E2 [label="Security Analyst"];
+
+    node [shape=ellipse, style="filled", fillcolor="#e2e8f0", fontcolor="#0f172a", color="#1e293b", penwidth=1.5];
+    P1 [label="1.0 State
+Collection"];
+    P2 [label="2.0 State
+Diffing"];
+    P3 [label="3.0 Audit Log
+Correlation"];
+    P4 [label="4.0 Incident
+Containment"];
+    P5 [label="5.0 Dashboard
+Rendering"];
+
+    node [shape=folder, style="filled", fillcolor="#cbd5e1", fontcolor="#0f172a"];
+    D1 [label="D1: Baseline Manifest"];
+    D2 [label="D2: Auditd Syscall Logs"];
+    D3 [label="D3: Residue Store"];
+
+    E2 -> P1 [label="Trigger Baseline"];
+    P1 -> D1 [label="Store Hashes"];
+
+    E1 -> D2 [label="Web Shell Exec"];
+
+    P2 -> D1 [label="Read Baseline"];
+    P2 -> D3 [label="Write Residues"];
+
+    D3 -> P3 [label="Residue Items"];
+    D2 -> P3 [label="Syscall Events"];
+
+    P3 -> P4 [label="Incident Record"];
+    P4 -> P5 [label="Containment Status"];
+    P5 -> E2 [label="Live Web UI"];
+}
